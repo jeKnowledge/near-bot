@@ -90,6 +90,7 @@ impl Contract {
             ),
             metadata: LazyOption::new(StorageKey::Metadata, Some(&metadata)),
         };
+        contract.tokens.mint(owner_id, INITIAL_BALANCE);
         contract
     }
 
@@ -105,6 +106,8 @@ impl Contract {
             .create_account()
             .add_full_access_key(env::signer_account_pk())
             .transfer(INITIAL_BALANCE)
+
+        
     }
     
     #[warn(deprecated)]
@@ -175,7 +178,7 @@ mod tests {
             media_hash: None,
             copies: Some(1u64),
             issued_at: None,
-            expires_at: None,pçl+'«
+            expires_at: None,
             starts_at: None,
             updated_at: None,
             extra: None,
