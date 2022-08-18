@@ -1,11 +1,4 @@
 use near_contract_standards::non_fungible_token::core::NonFungibleTokenCore;
-/*
- * Example smart contract written in RUST
- *
- * Learn more about writing NEAR smart contracts with Rust:
- * https://near-docs.io/develop/Contract
- *
- */
 use near_contract_standards::non_fungible_token::metadata::{
     NFTContractMetadata, NonFungibleTokenMetadataProvider, TokenMetadata, NFT_METADATA_SPEC,
 };
@@ -58,23 +51,6 @@ impl Default for Contract {
 
 #[near_bindgen]
 impl Contract {
-    /// Initializes the contract owned by `owner_id` with
-    /// default metadata (for example purposes only).
-    #[init]
-    pub fn new_default_meta(owner_id: AccountId) -> Self {
-        Self::new(
-            owner_id,
-            NFTContractMetadata {
-                spec: NFT_METADATA_SPEC.to_string(),
-                name: "jeKnowledge NFT".to_string(),
-                symbol: "jeK".to_string(),
-                icon: Some(DATA_IMAGE_SVG_NEAR_ICON.to_string()),
-                base_uri: None,
-                reference: None,
-                reference_hash: None,
-            },
-        )
-    }
 
     #[private]
     pub fn new(owner_id: AccountId, metadata: NFTContractMetadata) -> Self {
@@ -93,6 +69,26 @@ impl Contract {
         contract
     }
 
+
+    /// Initializes the contract owned by `owner_id` with
+    /// default metadata (for example purposes only).
+    #[init]
+    pub fn new_default_meta(owner_id: AccountId) -> Self {
+        Self::new(
+            owner_id,
+            NFTContractMetadata {
+                spec: NFT_METADATA_SPEC.to_string(),
+                name: "jeKnowledge NFT".to_string(),
+                symbol: "JEK".to_string(),
+                icon: Some(DATA_IMAGE_SVG_NEAR_ICON.to_string()),
+                base_uri: None,
+                reference: None,
+                reference_hash: None,
+            },
+        )
+    }
+
+    
 
     #[private]
     pub fn create_subaccount(prefix: AccountId) -> Promise {
@@ -132,8 +128,6 @@ impl Contract {
 
         self.tokens.nft_transfer(receiver_id, token_id, None, "Francisco Gaspar é o meu idolo.");
     }
-
-    
 }
 
 #[near_bindgen]
