@@ -1,76 +1,55 @@
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::collections::{LazyOption, LookupMap, UnorderedMap, UnorderedSet};
-use near_sdk::json_types::{Base64VecU8, U128};
-use near_sdk::serde::{Deserialize, Serialize};
-use near_sdk::{
-    env, near_bindgen, AccountId, Balance, CryptoHash, PanicOnDefault, Promise, PromiseOrValue,
+use near_contract_standards::non_fungible_token::metadata::{
+    NFTContractMetadata, NonFungibleTokenMetadataProvider, TokenMetadata, NFT_METADATA_SPEC,
 };
-use std::collections::HashMap;
-
-pub use crate::approval::*;
-use crate::internal::*;
-pub use crate::metadata::*;
-pub use crate::mint::*;
-pub use crate::nft_core::*;
-pub use crate::royalty::*;
-
-mod approval;
-mod enumeration;
-mod internal;
-mod metadata;
-mod mint;
-mod nft_core;
-mod royalty;
+use near_contract_standards::non_fungible_token::NonFungibleToken;
+use near_contract_standards::non_fungible_token::{Token, TokenId};
+use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+use near_sdk::collections::LazyOption;
+use near_sdk::Balance;
+use near_sdk::{
+    env, near_bindgen, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue,
+};
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Contract {
-    //contract owner
-    pub owner_id: AccountId,
-
-    //keeps track of all the token IDs for a given account
-    pub tokens_per_owner: LookupMap<AccountId, UnorderedSet<TokenId>>,
-
-    //keeps track of the token struct for a given token ID
-    pub tokens_by_id: LookupMap<TokenId, Token>,
-
-    //keeps track of the token metadata for a given token ID
-    pub token_metadata_by_id: UnorderedMap<TokenId, TokenMetadata>,
-
-    //keeps track of the metadata for the contract
-    pub metadata: LazyOption<NFTContractMetadata>,
+    tokens: NonFungibleToken,
+    metadata: LazyOption<NFTContractMetadata>,
+    total_minted: u64,
 }
 
-/// Helper structure for keys of the persistent collections.
-#[derive(BorshSerialize)]
-pub enum StorageKey {
-    TokensPerOwner,
-    TokenPerOwnerInner { account_id_hash: CryptoHash },
-    TokensById,
-    TokenMetadataById,
-    NFTContractMetadata,
-    TokensPerType,
-    TokensPerTypeInner { token_type_hash: CryptoHash },
-    TokenTypesLocked,
+const DATA_IMAGE_SVG_DIR: &str = &"https://i.imgur.com/7iluL9E.png";
+
+const DATA_IMAGE_SVG_TECH: &str = &"https://i.imgur.com/0PlCFZ5.png";
+
+const DATA_IMAGE_SVG_INT: &str = &"https://i.imgur.com/Y5eBaN2.png";
+
+const DATA_IMAGE_SVG_INO: &str = &"https://i.imgur.com/qNey5II.png";
+
+const INITIAL_BALANCE: Balance = 250_000_000_000_000_000_000_000; // 2.5e23yN, 0.25N
+
+#[derive(BorshSerialize, BorshStorageKey)]
+enum StorageKey {
+    NonFungibleToken,
+    Metadata,
+    TokenMetadata,
+    Enumeration,
+    Approval,
 }
 
 #[near_bindgen]
 impl Contract {
-    /*
-        initialization function (can only be called once).
-        this initializes the contract with default metadata so the
-        user doesn't have to manually type metadata.
-    */
+    /// Initializes the contract owned by `owner_id` with
+    /// default metadata (for example purposes only).
     #[init]
     pub fn new_default_meta(owner_id: AccountId) -> Self {
-        //calls the other function "new: with some default metadata and the owner_id passed in
         Self::new(
             owner_id,
             NFTContractMetadata {
-                spec: "nft-1.0.0".to_string(),
-                name: "NFT jeKnowledge Contract".to_string(),
+                spec: NFT_METADATA_SPEC.to_string(),
+                name: "jeKnowledgeNFT".to_string(),
                 symbol: "JEK".to_string(),
-                icon: None,
+                icon: Some(DATA_IMAGE_SVG_DIR.to_string()),
                 base_uri: None,
                 reference: None,
                 reference_hash: None,
@@ -78,76 +57,160 @@ impl Contract {
         )
     }
 
-    /*
-        initialization function (can only be called once).
-        this initializes the contract with metadata that was passed in and
-        the owner_id.
-    */
     #[init]
     pub fn new(owner_id: AccountId, metadata: NFTContractMetadata) -> Self {
-        //create a variable of type Self with all the fields initialized.
-        let this = Self {
-            //Storage keys are simply the prefixes used for the collections. This helps avoid data collision
-            tokens_per_owner: LookupMap::new(StorageKey::TokensPerOwner.try_to_vec().unwrap()),
-            tokens_by_id: LookupMap::new(StorageKey::TokensById.try_to_vec().unwrap()),
-            token_metadata_by_id: UnorderedMap::new(
-                StorageKey::TokenMetadataById.try_to_vec().unwrap(),
+        assert!(!env::state_exists(), "Already initialized");
+        metadata.assert_valid();
+        Self {
+            tokens: NonFungibleToken::new(
+                StorageKey::NonFungibleToken,
+                owner_id,
+                Some(StorageKey::TokenMetadata),
+                Some(StorageKey::Enumeration),
+                Some(StorageKey::Approval),
             ),
-            //set the owner_id field equal to the passed in owner_id.
-            owner_id,
-            metadata: LazyOption::new(
-                StorageKey::NFTContractMetadata.try_to_vec().unwrap(),
-                Some(&metadata),
-            ),
-        };
-        contract.tokens.mint(owner_id, INITIAL_BALANCE);
-        contract
+            metadata: LazyOption::new(StorageKey::Metadata, Some(&metadata)),
+            total_minted: 1,
+        }
     }
-
-
+    /// Mint a new token with ID=`token_id` belonging to `receiver_id`.
+    ///
+    /// Since this example implements metadata, it also requires per-token metadata to be provided
+    /// in this call. `self.tokens.mint` will also require it to be Some, since
+    /// `StorageKey::TokenMetadata` was provided at initialization.
+    ///
+    /// `self.tokens.mint` will enforce `predecessor_account_id` to equal the `owner_id` given in
+    /// initialization call to `new`.
     #[private]
-    pub fn create_subaccount(prefix: AccountId) -> Promise {
-        let subaccount_id = AccountId::new_unchecked(
-            // prefix.jeknowledge.testnet
-          format!("{}.{}", prefix, env::current_account_id())
-        );
-
-        Promise::new(subaccount_id)
-            .create_account()
-            .add_full_access_key(env::signer_account_pk())
-            .transfer(INITIAL_BALANCE)
-
-        
-    }
-    
-    #[warn(deprecated)]
     pub fn nft_mint(
         &mut self,
         token_id: TokenId,
         receiver_id: AccountId,
         token_metadata: TokenMetadata,
     ) -> Token {
-        // assert that the signer is the owner of the contract
-        assert_eq!(env::signer_account_id(), env::current_account_id(), "Only the owner can mint tokens");
-
-        create_subaccount(receiver_id);
-        self.tokens.mint(token_id, receiver_id, Some(token_metadata))
+        let token = self
+            .tokens
+            .mint(token_id, receiver_id, Some(token_metadata));
+        //parse self.total_minted to u64 and add 1
+        self.total_minted += 1;
+        return token;
     }
 
+    #[payable]
+    pub fn create_subaccount(&mut self, prefix: AccountId, dep: &str) -> Token {
+        // check if jeknowledge.testnet is the caller, if it is throw
+        assert!(
+            env::predecessor_account_id().to_string() == "jeknowledge.testnet",
+            "Only jeknowledge.testnet can create subaccounts"
+        );
 
-    pub fn nft_transfer(
-        &mut self,
-        token_id: TokenId,
-        receiver_id: AccountId,
-    ) -> Token {
-        // assert that the signer is the owner of the contract
-        assert_eq!(env::signer_account_id(),env::current_account_id(), "Only the owner can transfer");
+        let subaccount_id =
+            AccountId::new_unchecked(format!("{}.{}", prefix, env::current_account_id()));
 
-        self.tokens.nft_transfer(receiver_id, token_id, None, "Francisco Gaspar é o meu idolo.");
+        let _promise = Promise::new(subaccount_id.clone())
+            .create_account()
+            .add_full_access_key(env::signer_account_pk())
+            .transfer(INITIAL_BALANCE);
+
+        //match media_Svg to the respective svg
+        let media_Svg = match dep {
+            "TECH" => DATA_IMAGE_SVG_DIR.to_string(),
+            "INOVATION" => DATA_IMAGE_SVG_TECH.to_string(),
+            "INTERN" => DATA_IMAGE_SVG_INT.to_string(),
+            "DIRECTION" => DATA_IMAGE_SVG_INO.to_string(),
+            _ => panic!("Invalid department"),
+        };
+
+        //mint an nft to the subaccount
+        self.nft_mint(
+            self.total_minted.to_string(),
+            subaccount_id,
+            TokenMetadata {
+                title: Some(format!("JEK {} NFT", dep).to_string()),
+                description: Some("This is a JEKnowledge NFT".to_string()),
+                media: Some(media_Svg.to_string()),
+                media_hash: None,
+                copies: Some(1),
+                issued_at: None,
+                expires_at: None,
+                starts_at: None,
+                updated_at: None,
+                extra: None,
+                reference: None,
+                reference_hash: None,
+            },
+        )
     }
 
-    
+    pub fn get_nft(&self, account_id: AccountId) -> Token {
+        let token_id = self.tokens.get_token_id_by_index(account_id, 0);
+        return self.tokens.get_token(token_id);
+    }
+
+    pub fn all_inside(&self) -> Vec<AccountId> {
+        let mut all_inside: Vec<AccountId> = vec![];
+        let mut next_page = None;
+        loop {
+            let (accounts, new_next_page) =
+                self.tokens
+                    .nft_tokens_for_owner(env::current_account_id(), next_page, Some(100));
+            all_inside.extend(accounts);
+            if new_next_page.is_none() {
+                break;
+            }
+            next_page = new_next_page;
+        }
+        all_inside
+    }
+
+    pub fn get_total_minted(&self) -> u64 {
+        return self.total_minted;
+    }
+
+    pub fn get_metadata(&self) -> NFTContractMetadata {
+        self.metadata.get().unwrap()
+    }
+
+    pub fn get_token(&self, token_id: TokenId) -> Token {
+        self.tokens.get_token(token_id)
+    }
+
+    pub fn mint_for_account(&mut self, account_id: AccountId, dep: &str) -> Token {
+        let media_svg: Option<String> = None;
+
+        match dep {
+            "TECH" => media_svg = Some(DATA_IMAGE_SVG_TECH.to_string()),
+            "INOVATION" => media_svg = Some(DATA_IMAGE_SVG_INO.to_string()),
+            "INTERN" => media_svg = Some(DATA_IMAGE_SVG_INT.to_string()),
+            "DIRECTION" => media_svg = Some(DATA_IMAGE_SVG_DIR.to_string()),
+            _ => panic!("Department not valid"),
+        }
+
+        //mint an nft to the subaccount
+        self.nft_mint(
+            self.total_minted.to_string(),
+            account_id,
+            TokenMetadata {
+                title: Some(format!("JEK {} NFT", dep).to_string()),
+                description: Some("This is a JEKnowledge NFT".to_string()),
+                media: media_svg,
+                media_hash: None,
+                copies: Some(1),
+                issued_at: None,
+                expires_at: None,
+                starts_at: None,
+                updated_at: None,
+                extra: None,
+                reference: None,
+                reference_hash: None,
+            },
+        )
+    }
 }
+
+near_contract_standards::impl_non_fungible_token_core!(Contract, tokens);
+near_contract_standards::impl_non_fungible_token_approval!(Contract, tokens);
+near_contract_standards::impl_non_fungible_token_enumeration!(Contract, tokens);
 
 #[near_bindgen]
 impl NonFungibleTokenMetadataProvider for Contract {
@@ -155,7 +218,6 @@ impl NonFungibleTokenMetadataProvider for Contract {
         self.metadata.get().unwrap()
     }
 }
-
 
 /*
  * The rest of this file holds the inline tests for the code above
